@@ -1,0 +1,88 @@
+# AiDM
+
+import numpy as np
+import pandas as pd
+
+#load data
+#ratings=read_data("ratings.dat")
+
+def calculate_rank(vector):
+    a={}
+    rank=0
+    for num in sorted(vector):
+        if num not in a:
+            a[num]=rank
+            rank=rank+1
+    return np.array([a[i] for i in vector])
+
+def matrix_factorization(train_data,R, P, Q, K, steps=75, lr=0.005, regl=0.05):
+    Q=Q.T
+    for step in range(steps):
+        for i in range(len(train_data)):
+            P_old=P[train_data[i,0],:]
+            Q_old=Q[:,train_data[i,1]]
+            erri = R[train_data[i,0],train_data[i,1]] - np.dot(P_old,Q_old)
+            P[train_data[i,0],:],Q[:,train_data[i,1]] = P_old + lr* (2 * erri * Q_old - regl * P_old),Q_old + lr* (2 * erri * P_old - regl * Q_old)
+    return P, Q.T
+
+
+ratings=[]
+f = open("ratings.dat", 'r')
+for line in f:
+    data = line.split('::')
+    ratings.append([int(z) for z in data[:3]])
+f.close()
+ratings=np.array(ratings)
+dim=ratings.shape
+
+# there is gapping in number, so I rank all the movies and users
+new_ratings=ratings.copy()
+new_ratings[:,0]=calculate_rank(ratings[:,0])
+new_ratings[:,1]=calculate_rank(ratings[:,1])
+
+new_ratings_df = pd.DataFrame(new_ratings, columns=['id','movie','ratings'], index=range(0,len(new_ratings)))
+new_ratings_wide=new_ratings_df.pivot(index='id', columns='movie', values='ratings').fillna(0).values
+
+#split data into 5 train and test folds
+nfolds=5
+
+#allocate memory for results:
+err_train=np.zeros(nfolds)
+err_test=np.zeros(nfolds)
+err_train_MAE=np.zeros(nfolds)
+err_test_MAE=np.zeros(nfolds)
+
+#to make sure you are able to repeat results, set the random seed to something:
+np.random.seed(17)
+
+seqs=[x%nfolds for x in range(len(new_ratings))]
+np.random.shuffle(seqs)
+user=len(set(new_ratings[:,0]))
+film=len(set(new_ratings[:,1]))
+
+for fold in range(nfolds):
+    train_array=np.zeros((user,film), dtype=int)
+    train_sel=np.array([x!=fold for x in seqs])
+    test_sel=np.array([x==fold for x in seqs])
+    train=new_ratings[train_sel]
+    test=new_ratings[test_sel]
+    
+    # make the user and film matrix, will be zero inflated 
+    train_array[train[:,0],train[:,1]]=new_ratings_wide[train[:,0],train[:,1]]
+   
+    N = len(train_array)     # the user
+    M = len(train_array[0])  # the films
+    K = 10
+    P = np.random.rand(N,K)  
+    Q = np.random.rand(M,K)  
+    nP, nQ = matrix_factorization(train,train_array, P, Q, K)
+    nR = np.dot(nP, nQ.T)
+    
+    nR[nR<1]=1
+    nR[nR>5]=5
+    train_vec=nR[train[:,0],train[:,1]]
+    err_train[fold]=np.sqrt(np.mean((train_vec-train[:,2])**2))
+    err_train_MAE[fold]=np.mean(np.abs(train_vec-train[:,2]))
+    test_vec=nR[test[:,0],test[:,1]]
+    err_test[fold]=np.sqrt(np.mean((test_vec-test[:,2])**2))
+    err_test_MAE[fold]=np.mean(np.abs(test_vec-test[:,2]))
